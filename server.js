@@ -4,6 +4,7 @@ import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import nodemailer from 'nodemailer'
 import dotenv from 'dotenv'
+import { Resend } from 'resend'
 
 dotenv.config()
 
@@ -77,7 +78,10 @@ function createTransport() {
   })
 }
 
-const transporter = createTransport()
+// Prefer HTTPS email provider on platforms that block SMTP (like Render)
+const RESEND_API_KEY = process.env.RESEND_API_KEY
+const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null
+const transporter = !resend ? createTransport() : null
 
 app.post('/api/contact', async (req, res) => {
   try {
@@ -93,20 +97,40 @@ app.post('/api/contact', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Invalid email' })
     }
 
-    const toEmail = process.env.TO_EMAIL || 'sharansshetty123@gmail.com'
+    const toEmail = process.env.TO_EMAIL || 'you@example.com'
     const fromEmail = process.env.FROM_EMAIL || 'no-reply@localhost'
     const fromName = process.env.FROM_NAME || 'Portfolio Contact Form'
 
-    const mail = {
-      from: `${fromName} <${fromEmail}>`,
-      to: toEmail,
-      subject: `New Contact Message from ${name}`,
-      replyTo: email,
-      text: `You have a new message from your portfolio contact form.\n\nName: ${name}\nEmail: ${email}\n\nMessage:\n${message}`,
-      html: renderContactEmail({ name, email, message }),
-    }
+    const subject = `New Contact Message from ${name}`
+    const text = `You have a new message from your portfolio contact form.\n\nName: ${name}\nEmail: ${email}\n\nMessage:\n${message}`
+    const html = renderContactEmail({ name, email, message })
 
-    await transporter.sendMail(mail)
+    if (resend) {
+      const defaultResendFrom = 'onboarding@resend.dev'
+      const fromHeader = `${fromName} <${process.env.RESEND_FROM || defaultResendFrom}>`
+      const result = await resend.emails.send({
+        from: fromHeader,
+        to: [toEmail],
+        subject,
+        html,
+        text,
+        reply_to: email,
+      })
+      if (result.error) {
+        throw new Error(`Resend error: ${result.error.message || 'unknown error'}`)
+      }
+    } else if (transporter) {
+      await transporter.sendMail({
+        from: `${fromName} <${fromEmail}>`,
+        to: toEmail,
+        subject,
+        replyTo: email,
+        text,
+        html,
+      })
+    } else {
+      throw new Error('No email transport available')
+    }
 
     return res.json({ ok: true })
   } catch (err) {
