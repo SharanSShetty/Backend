@@ -10,6 +10,12 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 4000
 
+// When behind a proxy/load balancer (like Render, Vercel, Nginx, etc.),
+// Express must trust the proxy to correctly read X-Forwarded-* headers.
+// This MUST be set BEFORE using middlewares like express-rate-limit.
+// Setting to 1 trusts the first proxy hop which is typical for Render.
+app.set('trust proxy', 1)
+
 // Parse JSON
 app.use(express.json())
 
@@ -64,6 +70,10 @@ function createTransport() {
     port,
     secure,
     auth: { user, pass },
+    // Add conservative timeouts to avoid premature ETIMEDOUT in some envs
+    connectionTimeout: Number(process.env.SMTP_CONN_TIMEOUT || 15000),
+    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 10000),
+    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 20000),
   })
 }
 
