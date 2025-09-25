@@ -2,7 +2,6 @@ import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
-import nodemailer from 'nodemailer'
 import dotenv from 'dotenv'
 import { Resend } from 'resend'
 
@@ -54,34 +53,9 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, ts: Date.now() })
 })
 
-// Mailer transport
-function createTransport() {
-  const host = process.env.SMTP_HOST
-  const port = Number(process.env.SMTP_PORT || 587)
-  const secure = String(process.env.SMTP_SECURE || 'false') === 'true'
-  const user = process.env.SMTP_USER
-  const pass = process.env.SMTP_PASS
-
-  if (!host || !user || !pass) {
-    console.warn('SMTP not fully configured. Check SMTP_HOST/USER/PASS in .env')
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass },
-    // Add conservative timeouts to avoid premature ETIMEDOUT in some envs
-    connectionTimeout: Number(process.env.SMTP_CONN_TIMEOUT || 15000),
-    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 10000),
-    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 20000),
-  })
-}
-
-// Prefer HTTPS email provider on platforms that block SMTP (like Render)
+// Email provider (Resend over HTTPS)
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null
-const transporter = !resend ? createTransport() : null
 
 app.post('/api/contact', async (req, res) => {
   try {
@@ -98,38 +72,28 @@ app.post('/api/contact', async (req, res) => {
     }
 
     const toEmail = process.env.TO_EMAIL || 'you@example.com'
-    const fromEmail = process.env.FROM_EMAIL || 'no-reply@localhost'
     const fromName = process.env.FROM_NAME || 'Portfolio Contact Form'
 
     const subject = `New Contact Message from ${name}`
     const text = `You have a new message from your portfolio contact form.\n\nName: ${name}\nEmail: ${email}\n\nMessage:\n${message}`
     const html = renderContactEmail({ name, email, message })
 
-    if (resend) {
-      const defaultResendFrom = 'onboarding@resend.dev'
-      const fromHeader = `${fromName} <${process.env.RESEND_FROM || defaultResendFrom}>`
-      const result = await resend.emails.send({
-        from: fromHeader,
-        to: [toEmail],
-        subject,
-        html,
-        text,
-        reply_to: email,
-      })
-      if (result.error) {
-        throw new Error(`Resend error: ${result.error.message || 'unknown error'}`)
-      }
-    } else if (transporter) {
-      await transporter.sendMail({
-        from: `${fromName} <${fromEmail}>`,
-        to: toEmail,
-        subject,
-        replyTo: email,
-        text,
-        html,
-      })
-    } else {
-      throw new Error('No email transport available')
+    if (!resend) {
+      throw new Error('Resend is not configured. Set RESEND_API_KEY in your environment')
+    }
+
+    const defaultResendFrom = 'onboarding@resend.dev'
+    const fromHeader = `${fromName} <${process.env.RESEND_FROM || defaultResendFrom}>`
+    const result = await resend.emails.send({
+      from: fromHeader,
+      to: [toEmail],
+      subject,
+      html,
+      text,
+      reply_to: email,
+    })
+    if (result.error) {
+      throw new Error(`Resend error: ${result.error.message || 'unknown error'}`)
     }
 
     return res.json({ ok: true })
